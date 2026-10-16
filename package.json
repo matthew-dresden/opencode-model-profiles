@@ -1,0 +1,20 @@
+{
+  "name": "@matthew-dresden/opencode-model-profiles",
+  "version": "0.0.0",
+  "description": "opencode v2 plugin: per-model parameter profiles applied at config load and request time (extracted from matthew-dresden/opencode-config)",
+  "type": "module",
+  "main": "index.js",
+  "license": "Apache-2.0",
+  "private": false,
+  "files": [
+    "index.js",
+    "src",
+    "NOTICE"
+  ],
+  "scripts": {
+    "test": "node --test tests/model-profiles.test.mjs"
+  },
+  "publishConfig": {
+    "registry": "https://npm.pkg.github.com/"
+  }
+}
