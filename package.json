@@ -12,7 +12,8 @@
     "NOTICE"
   ],
   "scripts": {
-    "test": "node --test tests/model-profiles.test.mjs"
+    "test": "node --test tests/model-profiles.test.mjs",
+    "prepare": "bash scripts/security/install-hooks.sh"
   },
   "publishConfig": {
     "registry": "https://npm.pkg.github.com/"
