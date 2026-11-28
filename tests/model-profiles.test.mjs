@@ -12,9 +12,11 @@
 // state produced by the code under test.
 import { test } from "node:test"
 import assert from "node:assert/strict"
+import { execFileSync, spawnSync } from "node:child_process"
 import { mkdtempSync, readFileSync, rmSync } from "node:fs"
 import { tmpdir } from "node:os"
 import { join } from "node:path"
+import { fileURLToPath } from "node:url"
 
 const plugin = (await import("../src/index.js")).default
 const { MODEL_PROFILES, resolveProfile, applyProfileToBody } = await import("../src/registry.js")
@@ -354,3 +356,89 @@ test("MODEL_PROFILES_LOG: V1 hooks append timestamped lines", async () => {
     rmSync(dir, { recursive: true, force: true })
   }
 })
+
+// ---------------------------------------------------------------------------
+// Prepare installer (scripts/security/install-hooks.sh): conditional gitleaks
+// ---------------------------------------------------------------------------
+
+// Contract for the package.json "prepare" hook: the gitleaks probe is the
+// branch point.
+//   CI=true (GitHub Actions sets it natively) -> clean deterministic skip;
+//     runners never need gitleaks for `npm ci`/`npm pack` to succeed. The
+//     security workflow provisions its own pinned gitleaks and stays the
+//     enforcement plane.
+//   CI unset (developer checkout) -> behavior unchanged: hooks installed,
+//     gitleaks still hard-required.
+// The sandbox gives each row an isolated HOME and a working directory that is
+// NOT a git repo, so a stray `git config core.hooksPath` would fail loudly:
+// exit 0 in that directory is itself proof the CI branch skipped the install.
+
+const installHooksScript = join(fileURLToPath(new URL("..", import.meta.url)), "scripts", "security", "install-hooks.sh")
+
+// A PATH that carries a git toolchain but no gitleaks: gitleaks lives in the
+// Homebrew prefix on dev machines and is absent from GitHub runners.
+const noGitleaksPath = "/usr/bin:/bin"
+
+const gitleaksDir = (() => {
+  try {
+    return join(execFileSync("/usr/bin/which", ["gitleaks"], { encoding: "utf-8" }).trim(), "..")
+  } catch {
+    return null
+  }
+})()
+
+function runInstaller({ extraEnv = {}, withGitleaks = false, cwd }) {
+  const home = mkdtempSync(join(tmpdir(), "install-hooks-home-"))
+  const gitleaksPrefix = withGitleaks && gitleaksDir ? `${gitleaksDir}:` : ""
+  try {
+    return spawnSync("bash", [installHooksScript], {
+      cwd,
+      env: {
+        ...extraEnv,
+        PATH: `${gitleaksPrefix}${noGitleaksPath}`,
+        HOME: home,
+      },
+      encoding: "utf8",
+    })
+  } finally {
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
+test("prepare installer skips cleanly under CI=true without gitleaks", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "install-hooks-ci-"))
+  try {
+    const result = runInstaller({ extraEnv: { CI: "true" }, cwd })
+    assert.equal(result.status, 0, `expected clean skip, got status ${result.status}; stderr: ${result.stderr}`)
+    assert.match(result.stdout, /skipping git hooks install/)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test("prepare installer still fails loudly without gitleaks when CI is unset", () => {
+  const cwd = mkdtempSync(join(tmpdir(), "install-hooks-dev-"))
+  try {
+    const result = runInstaller({ cwd })
+    assert.notEqual(result.status, 0, "developer checkouts must hard-require gitleaks")
+    assert.match(result.stderr, /gitleaks is not on PATH/)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
+})
+
+test(
+  "prepare installer keeps developer behavior: hooks installed with gitleaks present",
+  { skip: gitleaksDir === null ? "gitleaks not installed on this machine" : false },
+  () => {
+    const cwd = mkdtempSync(join(tmpdir(), "install-hooks-parity-"))
+    execFileSync("git", ["init", "--quiet", cwd], { cwd })
+    try {
+      const result = runInstaller({ withGitleaks: true, cwd })
+      assert.equal(result.status, 0, `expected hooks install to succeed, got status ${result.status}; stderr: ${result.stderr}`)
+      assert.match(result.stdout, /Hooks installed/)
+    } finally {
+      rmSync(cwd, { recursive: true, force: true })
+    }
+  },
+)
